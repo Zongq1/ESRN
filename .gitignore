@@ -36,11 +36,17 @@ checkpoints/
 runs/
 lightning_logs/
 
-# Data
-data/
-datasets/
+# Data files (but keep code)
+data/RAVEN-*
+data/*.npz
+data/*.zip
+data/*.tar.gz
+*.npz
 *.zip
-*.tar.gz
+
+# Keep dataset loader code
+!esrn/datasets/
+!esrn/data/
 
 # Experiments
 wandb/
