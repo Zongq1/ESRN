@@ -53,8 +53,8 @@ class RAVENDataset(Dataset):
         self.transform = transform
         self.img_size = img_size
         
-        # Path to this configuration
-        self.config_path = self.data_root / config / split
+        # Path to this configuration (all files in one directory)
+        self.config_path = self.data_root / config
         
         if not self.config_path.exists():
             raise FileNotFoundError(
@@ -62,8 +62,15 @@ class RAVENDataset(Dataset):
                 f"Please download RAVEN dataset to {self.data_root}"
             )
         
-        # Get all NPZ files
-        self.samples = sorted(list(self.config_path.glob('*.npz')))
+        # Get NPZ files for this split (e.g., RAVEN_*_train.npz)
+        pattern = f'RAVEN_*_{split}.npz'
+        self.samples = sorted(list(self.config_path.glob(pattern)))
+        
+        if len(self.samples) == 0:
+            raise FileNotFoundError(
+                f"No samples found for {config}/{split}\n"
+                f"Looking for pattern: {pattern} in {self.config_path}"
+            )
         
         print(f"Loaded {len(self.samples)} samples from {config}/{split}")
     
@@ -278,9 +285,15 @@ if __name__ == "__main__":
             print("Available RAVEN configurations:")
             print("=" * 70)
             for i, config in enumerate(RAVENDataset.get_all_configs(), 1):
-                config_path = data_root / config / 'train'
-                exists = "✅" if config_path.exists() else "❌"
-                print(f"{i}. {exists} {config}")
+                config_path = data_root / config
+                # Check if config directory has train samples
+                train_files = list(config_path.glob('RAVEN_*_train.npz'))
+                val_files = list(config_path.glob('RAVEN_*_val.npz'))
+                test_files = list(config_path.glob('RAVEN_*_test.npz'))
+                
+                exists = "✅" if len(train_files) > 0 else "❌"
+                count_str = f"(train:{len(train_files)}, val:{len(val_files)}, test:{len(test_files)})"
+                print(f"{i}. {exists} {config:50s} {count_str}")
             
             print("\n" + "=" * 70)
             print("✅ All tests passed!")
