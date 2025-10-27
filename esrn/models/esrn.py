@@ -104,11 +104,11 @@ class ESRN(nn.Module):
         
         Args:
             context_panels: (B, 8, C, H, W) - 8 context panels
-            answer_panels: (B, 8, C, H, W) - 8 candidate answer panels (optional)
+            answer_panels: (B, 8, C, H, W) - 8 candidate answer panels
             return_details: whether to return intermediate states
         
         Returns:
-            logits: (B, num_classes) - answer predictions
+            logits: (B, 8) - scores for 8 candidate answers
             details: dict with intermediate states (if return_details=True)
         """
         B = context_panels.size(0)
@@ -121,7 +121,7 @@ class ESRN(nn.Module):
         _, D, H, W = context_symbols.shape
         context_symbols = context_symbols.view(B, 8, D, H, W)
         
-        # Aggregate context (e.g., mean pooling across 8 panels)
+        # Aggregate context
         aggregated_context = context_symbols.mean(dim=1)  # (B, D, H', W')
         
         # Apply rule-based reasoning
@@ -130,21 +130,33 @@ class ESRN(nn.Module):
             adaptive=self.adaptive_steps
         )
         
-        # Decode to answer prediction
-        if self.decoder_type == 'contrastive' and answer_panels is not None:
-            # Encode answer panels
+        # Encode answer panels if provided
+        if answer_panels is not None:
             answer_flat = answer_panels.view(B * 8, *answer_panels.shape[2:])
             answer_symbols, _, _ = self.encoder(answer_flat)
             answer_symbols = answer_symbols.view(B, 8, D, H, W)
             
-            logits, similarity = self.decoder(reasoning_state, answer_symbols)
-        
-        elif self.decoder_type == 'multi_head':
-            logits, head_weights = self.decoder(reasoning_state)
-            if not return_details:
-                return logits
-        
+            # Score each candidate answer
+            logits_list = []
+            for i in range(8):
+                # Combine reasoning state with candidate answer
+                candidate = answer_symbols[:, i]  # (B, D, H, W)
+                
+                # Concatenate and score
+                combined = torch.cat([reasoning_state, candidate], dim=1)  # (B, 2*D, H, W)
+                
+                # Use decoder to score this combination
+                if self.decoder_type == 'basic':
+                    # For basic decoder, we need to modify it to accept combined input
+                    score = self.decoder(combined).squeeze(-1)  # (B,)
+                else:
+                    score = self.decoder(combined).squeeze(-1)
+                
+                logits_list.append(score)
+            
+            logits = torch.stack(logits_list, dim=1)  # (B, 8)
         else:
+            # Fallback: just use reasoning state
             logits = self.decoder(reasoning_state)
         
         if not return_details:
@@ -161,11 +173,8 @@ class ESRN(nn.Module):
             'rule_selections': step_info['rule_selections']
         }
         
-        if self.decoder_type == 'contrastive' and answer_panels is not None:
-            details['answer_similarity'] = similarity
-        
-        if self.decoder_type == 'multi_head':
-            details['decoder_head_weights'] = head_weights
+        if answer_panels is not None:
+            details['answer_symbols'] = answer_symbols
         
         return logits, details
     

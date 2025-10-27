@@ -14,7 +14,7 @@ from tqdm import tqdm
 import json
 from datetime import datetime
 
-from esrn.models.esrn import ESRN
+from esrn.models.esrn_fixed import ESRNFixed
 from esrn.datasets.raven_dataset import RAVENDataset
 
 
@@ -205,7 +205,10 @@ class ESRNTrainer:
         print(f"{'='*70}\n")
     
     def save_checkpoint(self, epoch, is_best=False):
-        """Save model checkpoint"""
+        """Save model checkpoint with safety mechanisms"""
+        import os
+        import tempfile
+        
         checkpoint = {
             'epoch': epoch,
             'model_state_dict': self.model.state_dict(),
@@ -216,22 +219,60 @@ class ESRNTrainer:
             'val_history': self.val_history
         }
         
+        # 安全保存：先保存到临时文件，确认成功后再移动
         if is_best:
-            path = self.save_dir / 'best_model.pth'
-            torch.save(checkpoint, path)
-            print(f"💾 Saved best model to {path}")
+            final_path = self.save_dir / 'best_model.pth'
         else:
-            path = self.save_dir / f'checkpoint_epoch_{epoch}.pth'
-            torch.save(checkpoint, path)
-            print(f"💾 Saved checkpoint to {path}")
+            final_path = self.save_dir / f'checkpoint_epoch_{epoch}.pth'
         
-        # Save training history
+        # 创建临时文件
+        temp_path = self.save_dir / f'temp_checkpoint_{epoch}.pth'
+        
+        try:
+            # 保存到临时文件
+            torch.save(checkpoint, temp_path)
+            
+            # 验证文件大小（应该>1MB）
+            file_size = os.path.getsize(temp_path)
+            if file_size < 1000:  # 小于1KB表示保存失败
+                raise RuntimeError(f"Checkpoint file too small: {file_size} bytes")
+            
+            # 强制刷新到磁盘
+            with open(temp_path, 'rb') as f:
+                f.read(1)  # 触发系统缓存刷新
+            
+            # 重命名为最终文件（原子操作）
+            if final_path.exists():
+                final_path.unlink()  # 删除旧文件
+            temp_path.rename(final_path)
+            
+            print(f"💾 Safely saved checkpoint to {final_path} ({file_size/1024/1024:.2f} MB)")
+            
+        except Exception as e:
+            print(f"❌ Error saving checkpoint: {e}")
+            if temp_path.exists():
+                temp_path.unlink()
+            raise
+        
+        # Save training history (also with safety)
         history_path = self.save_dir / 'training_history.json'
-        with open(history_path, 'w') as f:
-            json.dump({
-                'train': self.train_history,
-                'val': self.val_history
-            }, f, indent=2)
+        temp_history = self.save_dir / 'temp_history.json'
+        
+        try:
+            with open(temp_history, 'w') as f:
+                json.dump({
+                    'train': self.train_history,
+                    'val': self.val_history
+                }, f, indent=2)
+            
+            if history_path.exists():
+                history_path.unlink()
+            temp_history.rename(history_path)
+            
+        except Exception as e:
+            print(f"⚠️  Warning: Could not save training history: {e}")
+            if temp_history.exists():
+                temp_history.unlink()
 
 
 def main():
@@ -347,7 +388,7 @@ def main():
     
     # Create model
     print("Creating ESRN model...")
-    model = ESRN(
+    model = ESRNFixed(
         in_channels=1,
         encoder_hidden_dims=[64, 128, 256],
         vocab_size=args.num_symbols,
@@ -355,9 +396,7 @@ def main():
         num_rules=args.num_rules,
         rule_hidden_dim=args.hidden_dim // 4,  # 128
         max_steps=5,
-        decoder_type='basic',
-        decoder_hidden_dim=args.hidden_dim // 2,  # 256
-        num_classes=8
+        commitment_cost=0.05
     )
     
     # Create trainer
